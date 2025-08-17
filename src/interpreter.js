@@ -229,6 +229,9 @@ function executeBlock(lines, baseIndentLevel, scope, outputBuffer) {
 
 // --- メインの実行関数をエクスポート ---
 export function runInterpreter(code) {
+    code = code
+        .replace(/[""]/g, '"')  // スマートダブルクォートを通常のダブルクォートに変換
+        .replace(/['']/g, "'"); // スマートシングルクォートを通常のシングルクォートに変換
     // ▼▼▼ ここからセキュリティチェックを追加 ▼▼▼
     const blacklist = /\b(window|document|alert|script|eval|Function|setTimeout|setInterval|fetch|XMLHttpRequest)\b/i;
     if (blacklist.test(code)) {
