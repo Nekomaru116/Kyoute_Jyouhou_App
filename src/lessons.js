@@ -237,5 +237,46 @@ export const lessons = {
         options: [{text: "A. 20", correct: false},{text: "B. 30", correct: false},{text: "C. 50", correct: true},{text: "D. 60", correct: false}],
         explanation: '<strong>正解：C. 50</strong><br><code>Table[2][0]</code>は「タテに2進んだ段（3段目）の、ヨコに0進んだ場所（1番目）」を指します。3段目は `[50, 60]` で、その中の1番目の要素は `50` です。'
     }
-}
+},
+recursion: {
+        title: "再帰処理（発展）",
+        theory: `
+            <h3>再帰処理（発展）</h3>
+            <p><b>再帰処理</b>とは、ある関数が、その処理の内部で<b>自分自身をもう一度呼び出す</b>ことで、繰り返しを実現するテクニックです。</p>
+            <p>複雑な問題を、より小さな同じ問題に分割して解いていく際に非常に強力です。マトリョーシカ人形のように、大きな人形の中に同じ形の小さな人形が次々と入っているイメージです。</p>
+            
+            <h4>再帰関数の2つの必須要素</h4>
+            <div class="explanation-box">
+                <strong>1. ベースケース (Base Case)</strong><br>
+                再帰を停止させるための条件です。これがないと、関数は無限に自分を呼び出し続けてしまいます。（例：<code>もし n == 0 ならば</code>）
+            </div>
+            <div class="explanation-box">
+                <strong>2. 再帰ステップ (Recursive Step)</strong><br>
+                関数が自分自身を、少しだけ簡単な問題にして呼び出す部分です。（例：<code>n * 階乗(n-1)</code>）
+            </div>
+
+            <h4>具体例：階乗の計算</h4>
+            <p>共通テストの過去問でも、再帰処理の説明に「階乗」が用いられました。5の階乗（5!）は <code>5 * 4 * 3 * 2 * 1</code> ですが、これは <code>5 * (4の階乗)</code> とも考えられます。</p>
+            <div class="code-example">
+                <div class="code-line"># 「階乗(n)」の定義（イメージ）</div>
+                <div class="code-line">関数 階乗(n)</div>
+                <div class="code-line">　もし n == 0 ならば:</div>
+                <div class="code-line">　　　1 を返す  // ← ベースケース</div>
+                <div class="code-line">　そうでなければ:</div>
+                <div class="code-line">　　　n * 階乗(n - 1) を返す // ← 再帰ステップ</div>
+            </div>
+            <p>このレッスンでは、あらかじめ用意された<code>階乗()</code>関数を呼び出して、再帰の動きを体験できます。</p>
+        `,
+        example: '# 5の階乗を計算してみる\n結果 = 階乗(5)\n表示する("5の階乗は", 結果, "です")\n\n# 5 * 4 * 3 * 2 * 1 = 120',
+        quiz: {
+            question: "`階乗(3)` を実行したときの、内部での計算の流れとして正しいものはどれですか？",
+            code: '// 階乗(3) は 3 * 2 * 1 = 6',
+            options: [
+                {text: "A. 3 * 階乗(2) → 3 * 2 * 階乗(1) → 3 * 2 * 1 * 階乗(0) → 3 * 2 * 1 * 1", correct: true},
+                {text: "B. 階乗(0) → 階乗(1) → 階乗(2) → 階乗(3)", correct: false},
+                {text: "C. 3 * 2 * 1", correct: false}
+            ],
+            explanation: '<strong>正解：A</strong><br>再帰は、まず問題を小さくしていき（3→2→1→0）、ベースケース（階乗(0)が1）に到達したら、そこから逆順に計算結果を返していきます。'
+        }
+    }
         };

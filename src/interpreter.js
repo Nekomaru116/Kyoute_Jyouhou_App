@@ -7,16 +7,49 @@ function extractCondition(line) { return line.substring(line.indexOf('もし ') 
 function evaluateExpression(expr, variables) {
     expr = expr.trim();
 
-    // ▼▼▼ 引数を分割するロジックを新しいものに置き換え ▼▼▼
+    // ▼▼▼ 要素数()の処理を、より強力な再帰的な評価方法に変更 ▼▼▼
+    // この処理は、他の計算よりも先に行う必要があります。
+    if (expr.startsWith('要素数(') && expr.endsWith(')')) {
+        const innerExpr = expr.substring('要素数('.length, expr.length - 1);
+        // 括弧の中身をまず評価する
+        const arrayValue = evaluateExpression(innerExpr, variables);
+        if (Array.isArray(arrayValue)) {
+            return arrayValue.length;
+        }
+    }
+    // ▲▲▲ ここまで ▲▲▲
+
+    expr = expr.replace(/乱数\s*\(\s*\)/g, () => Math.random());
+    expr = expr.replace(/整数\s*\(/g, 'Math.floor(');
+    
+    // `要素数()`が式の一部として使われる場合（例：要素数(Data) - 1）
+    expr = expr.replace(/要素数\s*\(\s*(\S+?)\s*\)/g, (match, varName) => {
+        if (variables[varName] && Array.isArray(variables[varName])) {
+            return variables[varName].length;
+        }
+        return match;
+    });
+    
+    const containsIntDivision = expr.includes('÷');
+    if (containsIntDivision) {
+        expr = expr.replace(/÷/g, '/');
+    }
+
     const parts = [];
     let currentPart = '';
     let inQuote = false;
+    let bracketDepth = 0;
     for (let i = 0; i < expr.length; i++) {
         const char = expr[i];
         if (char === '"' && (i === 0 || expr[i-1] !== '\\')) {
             inQuote = !inQuote;
+        } else if (char === '[' && !inQuote) {
+            bracketDepth++;
+        } else if (char === ']' && !inQuote) {
+            bracketDepth--;
         }
-        if (char === ',' && !inQuote) {
+
+        if (char === ',' && !inQuote && bracketDepth === 0) {
             parts.push(currentPart.trim());
             currentPart = '';
         } else {
@@ -25,19 +58,15 @@ function evaluateExpression(expr, variables) {
     }
     parts.push(currentPart.trim());
 
-    // 引数が複数ある場合
-    if (parts.length > 1) {
+    if (parts.length > 1 && expr.includes(',')) {
         const evaluatedParts = [];
         for (const part of parts) {
-            if (part === '') continue; // 空のパーツは無視
+            if (part === '') continue;
             evaluatedParts.push(evaluateExpression(part, variables));
         }
-        // スペースなしで結合
         return evaluatedParts.join('');
     }
-    // ▲▲▲ ここまで ▲▲▲
 
-    // --- 以下は単一の引数を評価するロジック (変更なし) ---
     const stringLiteralRegex = /^"((?:[^"\\]|\\.)*)"$/;
     if (stringLiteralRegex.test(expr)) {
         return expr.substring(1, expr.length - 1).replace(/\\"/g, '"').replace(/\\\\/g, '\\');
@@ -54,8 +83,15 @@ function evaluateExpression(expr, variables) {
     if (!isNaN(expr) && expr !== '') { return parseFloat(expr); }
     
     try {
-        const func = new Function('scope', `with(scope) { return ${expr}; }`);
-        const result = func(variables);
+        const keys = Object.keys(variables);
+        const values = Object.values(variables);
+        const func = new Function(...keys, `return ${expr};`);
+        let result = func(...values);
+        
+        if (containsIntDivision && typeof result === 'number') {
+            result = Math.floor(result);
+        }
+
         if (typeof result === 'boolean') {
             return result ? '真（true)' : '偽(false)';
         }
@@ -66,7 +102,11 @@ function evaluateExpression(expr, variables) {
 }
 
 function evaluateConditionForIf(condition, variables) {
-    let expr = condition.replace(/ かつ /g, ' && ').replace(/ または /g, ' || ');
+    // and, or, not に対応
+    let expr = condition
+        .replace(/ かつ | and /gi, ' && ')
+        .replace(/ または | or /gi, ' || ')
+        .replace(/ not /gi, ' !');
     try {
         const keys = Object.keys(variables);
         const values = Object.values(variables);
@@ -94,6 +134,22 @@ const executeAssignment = (line, scope) => {
     const parts = line.split('=');
     const leftHand = parts[0].trim();
     const expression = parts.slice(1).join('=').trim();
+
+    // 複数代入の処理
+    if (leftHand.includes(',') && expression.includes(',')) {
+        const leftVars = leftHand.split(',').map(v => v.trim());
+        const rightExprs = expression.split(',').map(e => e.trim());
+
+        if (leftVars.length === rightExprs.length) {
+            const tempResults = rightExprs.map(expr => evaluateExpression(expr, scope));
+            leftVars.forEach((varName, index) => {
+                scope[varName] = tempResults[index];
+            });
+            return;
+        }
+    }
+
+    // 単一代入の処理
     const arrayMatch2D = leftHand.match(/(\S+)\[([^\]]+)\]\[([^\]]+)\]/);
     if (arrayMatch2D) {
         const [, varName, indexExpr1, indexExpr2] = arrayMatch2D;
@@ -114,114 +170,154 @@ const executeAssignment = (line, scope) => {
         return;
     }
     const varName = leftHand;
-    if (expression.startsWith('[') && expression.endsWith(']')) {
-        scope[varName] = eval(expression);
-    } else {
-        scope[varName] = evaluateExpression(expression, scope);
-    }
+    scope[varName] = evaluateExpression(expression, scope);
 };
 
-// --- 再帰的なブロック実行関数 ---
 function executeBlock(lines, baseIndentLevel, scope, outputBuffer) {
     let i = 0;
     while (i < lines.length) {
         const line = lines[i];
-        try{
-        const currentIndentMatch = line.match(/^\s*/);
-        const currentIndent = currentIndentMatch ? currentIndentMatch[0] : "";
+        try {
+            const currentIndentMatch = line.match(/^\s*/);
+            const currentIndent = currentIndentMatch ? currentIndentMatch[0] : "";
 
-        if (currentIndent.length < baseIndentLevel && line.trim() !== '') {
-            return i; 
-        }
-
-        const trimmedLine = line.trim();
-        if (trimmedLine === '') { i++; continue; }
-
-        const isDisplayFunc = trimmedLine.startsWith('表示する(');
-        const isIfStatement = trimmedLine.startsWith('もし ');
-        const isForLoop = /を.*から.*まで.*(増やし|減らし)ながら繰り返す:/.test(trimmedLine);
-        const isWhileLoop = /の間、繰り返す:$/.test(trimmedLine);
-        const isAssignment = trimmedLine.includes('=') && !/==|>=|<=|!=/.test(trimmedLine);
-
-        if (isIfStatement) {
-            const condition = extractCondition(trimmedLine);
-            const conditionResult = evaluateConditionForIf(condition, scope);
-            
-            const ifBlockStartIndex = i + 1;
-            let ifBlockEndIndex = ifBlockStartIndex;
-            while (ifBlockEndIndex < lines.length && (lines[ifBlockEndIndex].match(/^\s*/)[0].length > currentIndent.length || lines[ifBlockEndIndex].trim() === '')) {
-                ifBlockEndIndex++;
+            if (currentIndent.length < baseIndentLevel && line.trim() !== '') {
+                return i; 
             }
-            
-            let elseBlockStartIndex = -1;
-            let elseBlockEndIndex = -1;
-            if (ifBlockEndIndex < lines.length && lines[ifBlockEndIndex].trim().startsWith('そうでなければ')) {
-                 if (lines[ifBlockEndIndex].match(/^\s*/)[0].length === currentIndent.length) {
-                    elseBlockStartIndex = ifBlockEndIndex + 1;
-                    elseBlockEndIndex = elseBlockStartIndex;
-                    while (elseBlockEndIndex < lines.length && (lines[elseBlockEndIndex].match(/^\s*/)[0].length > currentIndent.length || lines[elseBlockEndIndex].trim() === '')) {
-                        elseBlockEndIndex++;
+
+            const trimmedLine = line.trim();
+            if (trimmedLine === '') { i++; continue; }
+
+            const isDisplayFunc = trimmedLine.startsWith('表示する(');
+            const isIfStatement = trimmedLine.startsWith('もし ');
+            const isForLoop = /を.*から.*まで.*(増やし|減らし)ながら繰り返す:/.test(trimmedLine);
+            const isWhileLoop = /の間、繰り返す:$/.test(trimmedLine);
+            const isAssignment = trimmedLine.includes('=') && !/==|>=|<=|!=/.test(trimmedLine);
+
+            if (isIfStatement) {
+                let conditionMet = false;
+                let currentIndex = i;
+
+                // もし (if)
+                const ifCondition = extractCondition(lines[currentIndex].trim());
+                let blockStartIndex = currentIndex + 1;
+                let blockEndIndex = blockStartIndex;
+                while (blockEndIndex < lines.length && (lines[blockEndIndex].match(/^\s*/)[0].length > currentIndent.length || lines[blockEndIndex].trim() === '')) {
+                    blockEndIndex++;
+                }
+                if (evaluateConditionForIf(ifCondition, scope)) {
+                    conditionMet = true;
+                    executeBlock(lines.slice(blockStartIndex, blockEndIndex), currentIndent.length + 4, scope, outputBuffer);
+                }
+                currentIndex = blockEndIndex;
+
+                // そうでなくもし (else if)
+                while (currentIndex < lines.length && lines[currentIndex].trim().startsWith('そうでなくもし')) {
+                    const elseIfLine = lines[currentIndex].trim();
+                    blockStartIndex = currentIndex + 1;
+                    blockEndIndex = blockStartIndex;
+                    while (blockEndIndex < lines.length && (lines[blockEndIndex].match(/^\s*/)[0].length > currentIndent.length || lines[blockEndIndex].trim() === '')) {
+                        blockEndIndex++;
+                    }
+
+                    if (!conditionMet) {
+                        const elseIfCondition = elseIfLine.substring(elseIfLine.indexOf('もし ') + 3, elseIfLine.lastIndexOf('ならば:')).trim();
+                        if (evaluateConditionForIf(elseIfCondition, scope)) {
+                            conditionMet = true;
+                            executeBlock(lines.slice(blockStartIndex, blockEndIndex), currentIndent.length + 4, scope, outputBuffer);
+                        }
+                    }
+                    currentIndex = blockEndIndex;
+                }
+
+                // そうでなければ (else)
+                if (currentIndex < lines.length && lines[currentIndex].trim().startsWith('そうでなければ')) {
+                    blockStartIndex = currentIndex + 1;
+                    blockEndIndex = blockStartIndex;
+                    while (blockEndIndex < lines.length && (blockEndIndex < lines.length && (lines[blockEndIndex].match(/^\s*/)[0].length > currentIndent.length || lines[blockEndIndex].trim() === ''))) {
+                        blockEndIndex++;
+                    }
+                    if (!conditionMet) {
+                        executeBlock(lines.slice(blockStartIndex, blockEndIndex), currentIndent.length + 4, scope, outputBuffer);
+                    }
+                    currentIndex = blockEndIndex;
+                }
+                i = currentIndex;
+                continue;
+            }
+            else if (isForLoop) {
+                const loopParams = parseLoopStatement(trimmedLine, scope);
+                const loopBodyStartIndex = i + 1;
+                let loopBodyEndIndex = loopBodyStartIndex;
+                while (loopBodyEndIndex < lines.length && (lines[loopBodyEndIndex].match(/^\s*/)[0].length > currentIndent.length || lines[loopBodyEndIndex].trim() === '')) {
+                    loopBodyEndIndex++;
+                }
+                const loopBody = lines.slice(loopBodyStartIndex, loopBodyEndIndex);
+
+                if (loopParams && loopBody.length > 0) {
+                    const { variable, start, end, step } = loopParams;
+                    for (let j = start; (step > 0 ? j <= end : j >= end); j += step) {
+                        scope[variable] = j;
+                        executeBlock(loopBody, currentIndent.length + 4, scope, outputBuffer);
                     }
                 }
+                i = loopBodyEndIndex;
             }
-
-            if (conditionResult) {
-                executeBlock(lines.slice(ifBlockStartIndex, ifBlockEndIndex), currentIndent.length + 4, scope, outputBuffer);
-            } else if(elseBlockStartIndex !== -1) {
-                executeBlock(lines.slice(elseBlockStartIndex, elseBlockEndIndex), currentIndent.length + 4, scope, outputBuffer);
-            }
-            
-            i = elseBlockEndIndex !== -1 ? elseBlockEndIndex : ifBlockEndIndex;
-        }
-        else if (isForLoop) {
-            const loopParams = parseLoopStatement(trimmedLine, scope);
-            const loopBodyStartIndex = i + 1;
-            let loopBodyEndIndex = loopBodyStartIndex;
-            while (loopBodyEndIndex < lines.length && (lines[loopBodyEndIndex].match(/^\s*/)[0].length > currentIndent.length || lines[loopBodyEndIndex].trim() === '')) {
-                loopBodyEndIndex++;
-            }
-            const loopBody = lines.slice(loopBodyStartIndex, loopBodyEndIndex);
-
-            if (loopParams && loopBody.length > 0) {
-                const { variable, start, end, step } = loopParams;
-                for (let j = start; (step > 0 ? j <= end : j >= end); j += step) {
-                    scope[variable] = j;
-                    executeBlock(loopBody, currentIndent.length + 4, scope, outputBuffer);
-                }
-            }
-            i = loopBodyEndIndex;
-        }
-        else if (isWhileLoop) {
-             const condition = trimmedLine.substring(0, trimmedLine.indexOf('の間、繰り返す:')).trim();
-             const loopBodyStartIndex = i + 1;
-             let loopBodyEndIndex = loopBodyStartIndex;
-             while (loopBodyEndIndex < lines.length && (lines[loopBodyEndIndex].match(/^\s*/)[0].length > currentIndent.length || lines[loopBodyEndIndex].trim() === '')) {
-                 loopBodyEndIndex++;
-             }
-             const loopBody = lines.slice(loopBodyStartIndex, loopBodyEndIndex);
-
-             if (loopBody.length > 0) {
-                 let loopCount = 0; const maxLoops = 1000;
-                 while (evaluateConditionForIf(condition, scope)) {
-                     if (loopCount++ > maxLoops) throw new Error("無限ループの可能性があります。");
-                     executeBlock(loopBody, currentIndent.length + 4, scope, outputBuffer);
+            else if (isWhileLoop) {
+                 const condition = trimmedLine.substring(0, trimmedLine.indexOf('の間、繰り返す:')).trim();
+                 const loopBodyStartIndex = i + 1;
+                 let loopBodyEndIndex = loopBodyStartIndex;
+                 while (loopBodyEndIndex < lines.length && (lines[loopBodyEndIndex].match(/^\s*/)[0].length > currentIndent.length || lines[loopBodyEndIndex].trim() === '')) {
+                     loopBodyEndIndex++;
                  }
-             }
-             i = loopBodyEndIndex;
-        }
-         else if (isDisplayFunc) {
-            outputBuffer.push(evaluateExpression(extractDisplayContent(trimmedLine), scope));
-            i++;
-        } else if (isAssignment) {
-            executeAssignment(trimmedLine, scope);
-            i++;
-        } else {
-            i++;
-        }
-    }   catch (e) { // ▼▼▼ エラーを捕捉し、情報を付加して再スロー ▼▼▼
-            e.lineNumber = i + 1; // 1から始まる行番号
+                 const loopBody = lines.slice(loopBodyStartIndex, loopBodyEndIndex);
+
+                 if (loopBody.length > 0) {
+                     let loopCount = 0; const maxLoops = 1000;
+                     while (evaluateConditionForIf(condition, scope)) {
+                         if (loopCount++ > maxLoops) throw new Error("無限ループの可能性があります。");
+                         executeBlock(loopBody, currentIndent.length + 4, scope, outputBuffer);
+                     }
+                 }
+                 i = loopBodyEndIndex;
+            }
+             else if (isDisplayFunc) {
+                const content = extractDisplayContent(trimmedLine);
+                const parts = [];
+                let currentPart = '';
+                let inQuote = false;
+                let bracketDepth = 0;
+                for (let charIndex = 0; charIndex < content.length; charIndex++) {
+                    const char = content[charIndex];
+                    if (char === '"' && (charIndex === 0 || content[charIndex-1] !== '\\')) { inQuote = !inQuote; } 
+                    else if (char === '[' && !inQuote) { bracketDepth++; } 
+                    else if (char === ']' && !inQuote) { bracketDepth--; }
+                    if (char === ',' && !inQuote && bracketDepth === 0) {
+                        parts.push(currentPart);
+                        currentPart = '';
+                    } else {
+                        currentPart += char;
+                    }
+                }
+                parts.push(currentPart);
+
+                const evaluatedParts = [];
+                for (const part of parts) {
+                    if (part.trim() === '') continue;
+                    evaluatedParts.push(evaluateExpression(part, scope));
+                }
+                outputBuffer.push(evaluatedParts.join(''));
+                i++;
+            } else if (isAssignment) {
+                executeAssignment(trimmedLine, scope);
+                i++;
+            } else {
+                i++;
+            }
+        } catch (e) {
+            e.lineNumber = i + 1;
             e.lineContent = line;
-            throw e; // 上位のcatchブロックに投げる
+            throw e;
         }
     }
     return i;
@@ -229,24 +325,36 @@ function executeBlock(lines, baseIndentLevel, scope, outputBuffer) {
 
 // --- メインの実行関数をエクスポート ---
 export function runInterpreter(code) {
+    // スマートクォートなどを標準的な記号に変換
     code = code
-        .replace(/\u201c/g, '"')  // 左ダブルクォート (U+201C)
-        .replace(/\u201d/g, '"')  // 右ダブルクォート (U+201D)
-        .replace(/\u2018/g, "'")  // 左シングルクォート (U+2018)
-        .replace(/\u2019/g, "'")  // 右シングルクォート (U+2019)
-        .replace(/\u00a0/g, " ");  // ノーブレークスペースを通常のスペースに変換 (U+00A0)
-    // ▼▼▼ ここからセキュリティチェックを追加 ▼▼▼
+        .replace(/\u201c/g, '"')
+        .replace(/\u201d/g, '"')
+        .replace(/\u2018/g, "'")
+        .replace(/\u2019/g, "'")
+        .replace(/\u00a0/g, " ");
+
+    let processedCode = code.replace(/#.*$/gm, '');
+
+    // セキュリティチェック
     const blacklist = /\b(window|document|alert|script|eval|Function|setTimeout|setInterval|fetch|XMLHttpRequest)\b/i;
-    if (blacklist.test(code)) {
+    if (blacklist.test(processedCode)) {
         return {
             output: null,
-            error: 'エラー: 安全でない可能性のあるコードが含まれているため、実行をブロックしました。変数名等を見直してみて下さいm(_ _)m'
+            error: 'エラー: 安全でない可能性のあるコードが含まれているため、実行をブロックしました。'
         };
     }
-    // ▲▲▲ ここまで ▲▲▲
+    
     try {
-        const lines = code.replace(/　/g, '    ').split('\n');
-        const variables = {};
+        const lines = processedCode.replace(/　/g, '    ').split('\n');
+        const variables = {
+            '階乗': (n) => {
+                if (n < 0 || !Number.isInteger(n)) return NaN;
+                if (n === 0) return 1;
+                let result = 1;
+                for (let i = n; i > 0; i--) result *= i;
+                return result;
+            }
+        };
         const outputBuffer = [];
         
         executeBlock(lines, 0, variables, outputBuffer);
@@ -255,16 +363,14 @@ export function runInterpreter(code) {
             output: outputBuffer.join('\n').trim() || '（出力なし）',
             error: null
         };
-    }  catch (error) {
-        // ▼▼▼ エラーメッセージの表示形式をリッチにする ▼▼▼
-        let errorMessage = 'おっと、エラーのようです🥺もう一度コードを見直してみましょう: ' + error.message;
+    }catch (error) {
+        let errorMessage = 'おっと、エラーのようです😓もう一度コードを見直してみましょう: ' + error.message;
         if (error.lineNumber) {
-            errorMessage += `\n場所: ${(error.lineNumber)}行目\nコード: ${error.lineContent.trim()}`;
+            errorMessage += `\n場所: ${error.lineNumber}行目\nコード: ${error.lineContent.trim()}`;
         }
         return {
             output: null,
             error: errorMessage
         };
-        // ▲▲▲ ここまで ▲▲▲
     }
 }
