@@ -230,8 +230,11 @@ function executeBlock(lines, baseIndentLevel, scope, outputBuffer) {
 // --- メインの実行関数をエクスポート ---
 export function runInterpreter(code) {
     code = code
-        .replace(/[""]/g, '"')  // スマートダブルクォートを通常のダブルクォートに変換
-        .replace(/['']/g, "'"); // スマートシングルクォートを通常のシングルクォートに変換
+        .replace(/\u201c/g, '"')  // 左ダブルクォート (U+201C)
+        .replace(/\u201d/g, '"')  // 右ダブルクォート (U+201D)
+        .replace(/\u2018/g, "'")  // 左シングルクォート (U+2018)
+        .replace(/\u2019/g, "'")  // 右シングルクォート (U+2019)
+        .replace(/\u00a0/g, " ");  // ノーブレークスペースを通常のスペースに変換 (U+00A0)
     // ▼▼▼ ここからセキュリティチェックを追加 ▼▼▼
     const blacklist = /\b(window|document|alert|script|eval|Function|setTimeout|setInterval|fetch|XMLHttpRequest)\b/i;
     if (blacklist.test(code)) {
